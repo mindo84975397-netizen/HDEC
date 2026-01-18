@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>주택견적팀 물가지수 대시보드</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        :root { --navy: #001f3f; --green: #2d5a27; --bg: #f8f9fa; }
+        body { font-family: 'Pretendard', sans-serif; background: var(--bg); margin: 0; padding: 20px; color: #333; }
+        
+        /* Layout */
+        header { background: var(--navy); color: white; padding: 20px 30px; border-radius: 12px; margin-bottom: 25px; display: flex; justify-content: space-between; align-items: center; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: 20px; margin-bottom: 30px; }
+        
+        /* Card & Chart */
+        .card { background: white; border-radius: 15px; padding: 20px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); border: 1px solid #eee; transition: 0.3s; cursor: pointer; }
+        .card:hover { transform: translateY(-5px); border-color: var(--green); }
+        .card h3 { color: var(--navy); margin-top: 0; border-left: 5px solid var(--green); padding-left: 12px; font-size: 1.1rem; }
+        
+        /* Input Table Section */
+        .input-section { background: white; border-radius: 15px; padding: 25px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); margin-bottom: 30px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 15px; font-size: 0.9rem; }
+        th, td { border: 1px solid #ddd; padding: 10px; text-align: center; }
+        th { background: #f0f4f8; color: var(--navy); }
+        input { width: 80%; border: 1px solid #ccc; padding: 5px; text-align: center; border-radius: 4px; }
+        input:focus { outline: none; border-color: var(--green); background: #f0fff0; }
+
+        /* Modal */
+        #modal { display: none; position: fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.85); z-index:999; justify-content:center; align-items:center; }
+        .modal-box { background:white; width:85%; height:75%; padding:30px; border-radius:20px; position:relative; }
+        .close { position:absolute; top:15px; right:20px; font-size:35px; cursor:pointer; }
+    </style>
+</head>
+<body>
+
+<header>
+    <div>
+        <h2 style="margin:0;">Housing Cost Intelligence Dashboard</h2>
+        <small style="opacity:0.8;">주택견적팀 전용 물가/환율 관리 시스템</small>
+    </div>
+    <div style="text-align:right;">
+        <button onclick="updateCharts()" style="background:var(--green); color:white; border:none; padding:10px 20px; border-radius:8px; cursor:pointer; font-weight:bold;">데이터 즉시 반영</button>
+    </div>
+</header>
+
+<div class="grid">
+    <div class="card" onclick="zoom('construction')"><h3>건설공사비지수(주택)</h3><canvas id="c1"></canvas></div>
+    <div class="card" onclick="zoom('cpi')"><h3>소비자물가지수(CPI)</h3><canvas id="c2"></canvas></div>
+    <div class="card" onclick="zoom('ppi')"><h3>생산자물가지수(PPI)</h3><canvas id="c3"></canvas></div>
+    <div class="card" onclick="zoom('fx')"><h3>환율 추이(USD/EUR)</h3><canvas id="c4"></canvas></div>
+</div>
+
+<div class="input-section">
+    <h3 style="color:var(--navy); margin-top:0;">📋 월별 데이터 수동 보정 (최근 6개월)</h3>
+    <p style="font-size:0.85rem; color:red;">* 아래 표에 실제 수치를 입력하고 상단의 '데이터 즉시 반영' 버튼을 누르세요.</p>
+    <table id="inputTable">
+        <thead>
+            <tr>
+                <th>항목 / 월</th>
+                <th id="m1"></th><th id="m2"></th><th id="m3"></th><th id="m4"></th><th id="m5"></th><th id="m6"></th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr id="row-construction"><td>건설공사비</td></tr>
+            <tr id="row-cpi"><td>소비자물가</td></tr>
+            <tr id="row-ppi"><td>생산자물가</td></tr>
+            <tr id="row-usd"><td>달러(USD)</td></tr>
+        </tbody>
+    </table>
+</div>
+
+<div id="modal"><div class="modal-box"><span class="close" onclick="closeM()">&times;</span><h2 id="mt" style="color:var(--navy);"></h2><div style="height:90%;"><canvas id="mc"></canvas></div></div></div>
+
+<script>
+    const store = { labels: [], construction: [], cpi: [], ppi: [], usd: [], eur: [] };
+    let charts = {};
+
+    function init() {
+        const now = new Date();
+        // 최근 12개월 레이블 생성
+        for(let i=11; i>=0; i--) {
+            let d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+            store.labels.push(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2, '0')}`);
+        }
+
+        // 실제 현업 수치와 유사한 초기값 (거짓말 같은 API 에러 방지)
+        store.construction = store.labels.map((_, i) => 153.2 + (i * 0.4));
+        store.cpi = store.labels.map((_, i) => 114.1 + (i * 0.15));
+        store.ppi = store.labels.map((_, i) => 121.5 + (i * 0.2));
+        store.usd = store.labels.map((_, i) => 1345 + (i * 2));
+        store.eur = store.labels.map((_, i) => 1465 + (i * 1.5));
+
+        setupInputTable();
+        renderAll();
+    }
+
+    function setupInputTable() {
+        const recentMonths = store.labels.slice(-6);
+        recentMonths.forEach((m, i) => {
+            document.getElementById(`m${i+1}`).innerText = m;
+            const cells = ['construction', 'cpi', 'ppi', 'usd'];
+            cells.forEach(type => {
+                const tr = document.getElementById(`row-${type}`);
+                const td = document.createElement('td');
+                const val = type === 'usd' ? store[type].slice(-6)[i].toFixed(0) : store[type].slice(-6)[i].toFixed(1);
+                td.innerHTML = `<input type="number" step="0.1" class="in-${type}" value="${val}">`;
+                tr.appendChild(td);
+            });
+        });
+    }
+
+    function updateCharts() {
+        const types = ['construction', 'cpi', 'ppi', 'usd'];
+        types.forEach(type => {
+            const inputs = document.querySelectorAll(`.in-${type}`);
+            inputs.forEach((input, i) => {
+                store[type][store.labels.length - 6 + i] = parseFloat(input.value);
+            });
+        });
+        
+        // 기존 차트 파괴 후 재생성
+        Object.values(charts).forEach(c => c.destroy());
+        renderAll();
+        alert("실제 데이터가 대시보드에 반영되었습니다.");
+    }
+
+    function renderAll() {
+        const cfg = (data, color) => ({
+            type: 'line',
+            data: { labels: store.labels, datasets: [{ data, borderColor: color, tension: 0.3, pointRadius: 4 }] },
+            options: { responsive: true, plugins: { legend: { display: false } } }
+        });
+
+        charts.c1 = new Chart(document.getElementById('c1'), cfg(store.construction, '#2d5a27'));
+        charts.c2 = new Chart(document.getElementById('c2'), cfg(store.cpi, '#001f3f'));
+        charts.c3 = new Chart(document.getElementById('c3'), cfg(store.ppi, '#2d5a27'));
+        charts.c4 = new Chart(document.getElementById('c4'), {
+            type: 'line',
+            data: { 
+                labels: store.labels, 
+                datasets: [
+                    { label: 'USD', data: store.usd, borderColor: '#001f3f', tension: 0.3 },
+                    { label: 'EUR', data: store.eur, borderColor: '#2d5a27', tension: 0.3 }
+                ] 
+            }
+        });
+    }
+
+    let mChart;
+    function zoom(type) {
+        document.getElementById('modal').style.display = 'flex';
+        const ctx = document.getElementById('mc').getContext('2d');
+        if(mChart) mChart.destroy();
+        document.getElementById('mt').innerText = type.toUpperCase() + " 상세 추이";
+        
+        const ds = type === 'fx' 
+            ? [{ label: 'USD', data: store.usd, borderColor: '#001f3f' }, { label: 'EUR', data: store.eur, borderColor: '#2d5a27' }]
+            : [{ label: type, data: store[type], borderColor: '#001f3f', fill: true, backgroundColor: 'rgba(0,31,63,0.05)' }];
+
+        mChart = new Chart(ctx, { type: 'line', data: { labels: store.labels, datasets: ds }, options: { responsive: true, maintainAspectRatio: false } });
+    }
+
+    function closeM() { document.getElementById('modal').style.display = 'none'; }
+    window.onload = init;
+</script>
+</body>
+</html>
